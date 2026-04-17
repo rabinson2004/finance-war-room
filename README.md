@@ -1,47 +1,35 @@
 # Finance War Room
 
-Multi-agent personal finance advisor built with LangGraph, CrewAI, FastAPI, and React.  
-The system analyzes a financial profile through specialized agents, streams progress in real time, and returns a practical action plan.
+Finance War Room is a multi-agent personal finance advisor built with FastAPI, LangGraph, CrewAI, and React (Vite).
 
-## Overview
+It analyzes a financial profile through specialist agents, streams progress in real time, and returns an actionable plan for budgeting, debt payoff, investing, tax optimization, and goal planning.
 
-Finance War Room combines deterministic financial calculators with LLM-driven reasoning across five expert agents:
+## What This Project Does
 
-- **Budget Analyst**: identifies overspending and recoverable cash flow.
-- **Debt Strategist**: builds payoff sequencing (avalanche/snowball comparison).
-- **Investment Advisor**: recommends portfolio and goal-fund allocation.
-- **Tax Optimizer**: surfaces tax-saving opportunities.
-- **Goal Planner**: assembles a month-by-month roadmap to the target goal.
+- Runs a 6-step workflow: `intake -> budget -> debt -> invest -> tax -> roadmap`
+- Uses 5 expert agents:
+  - Budget Analyst
+  - Debt Strategist
+  - Investment Advisor
+  - Tax Optimizer
+  - Goal Planner
+- Streams live step-by-step analysis events over WebSocket
+- Supports two UI modes:
+  - **Demo** mode (simulated output, no backend required)
+  - **Live API** mode (real backend analysis)
+- Supports profile input via:
+  - direct JSON editing
+  - natural language (`Describe Profile` -> `POST /profile/from-text`)
+- Includes basic multi-currency handling (for example `USD`, `INR`, `AED`)
 
-## Core Features
+## Stack
 
-- Real-time analysis pipeline with WebSocket event streaming.
-- Demo mode (no backend required) and Live API mode.
-- Natural-language profile intake (`Describe Profile`) and JSON profile editing.
-- Financial calculators for debt, investing, tax, budgeting, and goal feasibility.
-- Shared LangGraph state passed through each agent stage.
-
-## System Architecture
-
-```text
-React UI (Demo + Live modes)
-  ├─ REST calls: /analyze, /analyze/sample, /profile/from-text
-  └─ WebSocket: /ws/analyze (streaming events + final result)
-
-FastAPI Backend
-  ├─ LangGraph workflow: intake -> budget -> debt -> invest -> tax -> roadmap
-  ├─ CrewAI agents + financial tools
-  └─ Shared WarRoomState for cross-agent context
-```
-
-## Tech Stack
-
-- **Backend**: FastAPI, LangGraph, CrewAI, LangChain, Pydantic v2
-- **Frontend**: React + Vite
+- **Backend**: FastAPI, Pydantic v2, LangGraph, CrewAI, LangChain
+- **Frontend**: React 18 + Vite 5
 - **Streaming**: WebSocket (`/ws/analyze`)
-- **LLM Providers**: OpenAI / Anthropic (env-configurable)
+- **LLM Providers**: OpenAI or Anthropic (env-configurable)
 
-## Repository Structure
+## Repository Layout
 
 ```text
 finance-war-room/
@@ -51,18 +39,20 @@ finance-war-room/
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── agents/
-│   ├── tools/
 │   ├── graph/
-│   └── models/
+│   ├── models/
+│   └── tools/
 ├── frontend/
-│   ├── src/App.jsx
+│   ├── src/
+│   │   ├── App.jsx
+│   │   └── main.jsx
 │   ├── package.json
 │   ├── vite.config.js
 │   └── .env.example
 └── README.md
 ```
 
-## Local Development
+## Local Setup
 
 ### Prerequisites
 
@@ -71,21 +61,37 @@ finance-war-room/
 - npm
 - OpenAI or Anthropic API key
 
-### 1) Backend Setup
+### 1) Backend
 
-```bash
+Windows (PowerShell):
+
+```powershell
 cd backend
-py -m venv venv
-venv\Scripts\activate
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
 python main.py
 ```
 
-Backend default URL: `http://localhost:8000`  
-Docs: `http://localhost:8000/docs`
+macOS/Linux:
 
-### 2) Frontend Setup
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
+
+Backend defaults:
+
+- API: `http://localhost:8000`
+- Docs: `http://localhost:8000/docs`
+- WS: `ws://localhost:8000/ws/analyze`
+
+### 2) Frontend
 
 ```bash
 cd frontend
@@ -93,16 +99,18 @@ npm install
 npm run dev
 ```
 
-Frontend default URL: `http://localhost:5173`  
-If 5173 is occupied, Vite automatically chooses another port (for example 5174).
+Frontend default URL: `http://localhost:5173` (or the next available Vite port).
 
 ## Environment Variables
 
 ### Backend (`backend/.env`)
 
-Required:
+Start from `.env.example`.
 
-- `OPENAI_API_KEY` (if `LLM_PROVIDER=openai`)
+Required (depending on provider):
+
+- `OPENAI_API_KEY` when `LLM_PROVIDER=openai`
+- `ANTHROPIC_API_KEY` when `LLM_PROVIDER=anthropic`
 
 Common:
 
@@ -118,61 +126,54 @@ Common:
 
 ### Frontend (`frontend/.env`)
 
+Start from `.env.example`.
+
 - `VITE_API_BASE=http://localhost:8000`
 - `VITE_WS_URL=ws://localhost:8000/ws/analyze` (optional override)
 
-## API Endpoints
+## API Surface
 
-- `GET /` - basic service metadata
-- `GET /sample-profile` - sample input profile
-- `POST /analyze` - full pipeline analysis from profile JSON
-- `POST /analyze/sample` - run analysis on sample profile
-- `POST /profile/from-text` - convert natural language into validated profile
-- `WS /ws/analyze` - stream step-by-step events and final results
+- `GET /` - service metadata, agents list, pipeline definition
+- `GET /sample-profile` - sample `FinancialProfile` payload
+- `POST /analyze` - run full synchronous analysis from profile JSON
+- `POST /analyze/sample` - run analysis using sample profile
+- `POST /profile/from-text` - convert natural language into validated profile JSON
+- `WS /ws/analyze` - stream workflow events and final results
 
-## Frontend Usage
+## Frontend Workflow
 
 1. Open the app.
-2. Choose mode:
-   - **Demo** for simulated output
-   - **Live API** for backend-driven analysis
-3. Provide input:
-   - **Describe Profile** to type in natural language, or
-   - **Edit Profile** for direct JSON editing
+2. Choose **Demo** or **Live API** mode.
+3. Enter profile data:
+   - **Edit Profile** for JSON
+   - **Describe Profile** for natural language parsing
 4. Click **Run Analysis**.
-5. Review streaming logs and final agent reports.
+5. Watch real-time agent logs and final reports.
 
-## Deployment (Recommended)
+## Deployment Notes
 
-- **Frontend**: Vercel
-- **Backend**: Render / Railway / Fly / VM
+- Frontend: Vercel (common choice)
+- Backend: Render / Railway / Fly.io / VM
 
-Production backend env recommendations:
+Recommended production settings:
 
-- `APP_ENV=production`
-- `RELOAD=false`
-- `CORS_ALLOW_LOCALHOST=false`
-- `CORS_ORIGINS=https://<your-frontend-domain>`
-
-Production frontend env recommendations:
-
-- `VITE_API_BASE=https://<your-backend-domain>`
-- `VITE_WS_URL=wss://<your-backend-domain>/ws/analyze`
+- Backend:
+  - `APP_ENV=production`
+  - `RELOAD=false`
+  - `CORS_ALLOW_LOCALHOST=false`
+- Frontend:
+  - `VITE_API_BASE=https://<your-backend-domain>`
+  - `VITE_WS_URL=wss://<your-backend-domain>/ws/analyze`
 
 ## Troubleshooting
 
-- **Cannot open `http://0.0.0.0:8000` in browser**: use `http://localhost:8000`.
-- **CORS preflight fails**: ensure frontend origin is included in `CORS_ORIGINS`.
-- **WebSocket fails in production**: use `wss://` URL and verify reverse proxy support.
-- **401 from LLM provider**: verify API key and selected provider.
-- **Slow first request on free hosting**: likely cold start behavior.
+- If `http://0.0.0.0:8000` does not open in browser, use `http://localhost:8000`.
+- If WebSocket fails in production, confirm `wss://` and proxy WebSocket support.
+- If LLM calls fail (`401`/auth errors), verify provider key and `LLM_PROVIDER`.
+- If CORS fails, verify frontend origin values in `CORS_ORIGINS`.
 
-## Security Notes
+## Security
 
-- Never commit `.env` or API keys.
-- Rotate keys immediately if exposed.
-- Keep production secrets only in hosting platform environment variables.
-
-## License
-
-Add your preferred license (MIT, Apache-2.0, etc.) in a `LICENSE` file.
+- Never commit `.env` files or API keys.
+- Store production secrets in your hosting provider environment variables.
+- Rotate keys immediately if they are exposed.

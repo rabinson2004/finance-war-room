@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class DebtItem(BaseModel):
     name: str = Field(..., description="Name of the debt (e.g., 'Credit Card')")
-    balance: float = Field(..., description="Current balance in USD")
+    balance: float = Field(..., description="Current balance in account currency")
     interest_rate: float = Field(..., description="Annual interest rate as %")
     minimum_payment: float = Field(..., description="Minimum monthly payment")
 
@@ -38,6 +38,7 @@ class FinancialProfile(BaseModel):
     employer_401k_match: float = Field(
         0, description="Employer 401k match percentage"
     )
+    currency: str = Field("USD", description="ISO currency code like USD, AED, EUR")
 
     @property
     def total_expenses(self) -> float:

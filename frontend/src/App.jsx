@@ -22,6 +22,27 @@ const FLOW = [
   { id: "roadmap", label: "Roadmap", icon: "🗺️" },
 ];
 
+const normalizeCurrencyCode = (value) => {
+  const code = String(value || "USD").trim().toUpperCase();
+  return code || "USD";
+};
+
+const currencyPrefix = (currencyCode) => {
+  const code = normalizeCurrencyCode(currencyCode);
+  if (code === "USD") return "$";
+  return `${code} `;
+};
+
+const formatMoney = (value, currencyCode = "USD") => {
+  return `${currencyPrefix(currencyCode)}${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+};
+
+const formatLogCurrency = (text, currencyCode = "USD") => {
+  const code = normalizeCurrencyCode(currencyCode);
+  if (code === "USD") return text;
+  return String(text || "").replace(/\$/g, currencyPrefix(code));
+};
+
 const DEFAULT_PROFILE = {
   monthly_income: 7500,
   expenses: { Housing: 2100, Food: 650, Transport: 400, Subscriptions: 180, Shopping: 520, Utilities: 220, Entertainment: 310, Insurance: 280, Miscellaneous: 190 },
@@ -41,6 +62,7 @@ const DEFAULT_PROFILE = {
   age: 30,
   risk_tolerance: "moderate",
   employer_401k_match: 4.0,
+  currency: "USD",
 };
 
 // ─── Small Components ───
@@ -51,7 +73,7 @@ function Spark({ data, color, w = 110, h = 28 }) {
   return <svg width={w} height={h}><polyline fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={pts} /></svg>;
 }
 
-function Donut({ segments, size = 130 }) {
+function Donut({ segments, size = 130, currencyCode = "USD" }) {
   const total = segments.reduce((s, d) => s + d.value, 0);
   let cum = 0;
   const r = 46, cx = 58, cy = 58, sw = 20, circ = 2 * Math.PI * r;
@@ -62,18 +84,20 @@ function Donut({ segments, size = 130 }) {
         cum += pct;
         return <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth={sw} strokeDasharray={`${dl} ${circ - dl}`} strokeDashoffset={doff} transform={`rotate(-90 ${cx} ${cy})`} opacity="0.8" />;
       })}
-      <text x={cx} y={cy - 4} textAnchor="middle" fill="#E2E8F0" fontSize="13" fontWeight="700" fontFamily="inherit">${(total / 1000).toFixed(1)}k</text>
+      <text x={cx} y={cy - 4} textAnchor="middle" fill="#E2E8F0" fontSize="13" fontWeight="700" fontFamily="inherit">
+        {currencyPrefix(currencyCode)}{(total / 1000).toFixed(1)}k
+      </text>
       <text x={cx} y={cy + 10} textAnchor="middle" fill="#64748B" fontSize="8.5" fontFamily="inherit">/month</text>
     </svg>
   );
 }
 
-function DebtBar({ name, balance, rate, max, color }) {
+function DebtBar({ name, balance, rate, max, color, currencyCode }) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
         <span style={{ color: "#E2E8F0" }}>{name}</span>
-        <span style={{ color: "#64748B" }}>${balance.toLocaleString()} · {rate}%</span>
+        <span style={{ color: "#64748B" }}>{formatMoney(balance, currencyCode)} · {rate}%</span>
       </div>
       <div style={{ height: 7, borderRadius: 4, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
         <div style={{ width: `${(balance / max) * 100}%`, height: "100%", borderRadius: 4, background: color, transition: "width 1s" }} />
@@ -184,10 +208,25 @@ export default function FinanceWarRoom() {
   const [promptText, setPromptText] = useState("");
   const [promptLoading, setPromptLoading] = useState(false);
   const [promptError, setPromptError] = useState("");
-  const [mode, setMode] = useState("demo"); // "demo" = local simulation, "live" = API/WebSocket
+  const [mode, setMode] = useState("live"); // "demo" = local simulation, "live" = API/WebSocket
   const [connected, setConnected] = useState(false);
   const logsEnd = useRef(null);
   const wsRef = useRef(null);
+
+  const totalExpenses = Object.values(profile.expenses || {}).reduce((sum, amount) => sum + (Number(amount) || 0), 0);
+  const totalDebt = (profile.debts || []).reduce((sum, debt) => sum + (Number(debt.balance) || 0), 0);
+  const monthlyDebtMinimum = (profile.debts || []).reduce((sum, debt) => sum + (Number(debt.minimum_payment) || 0), 0);
+  const freeCash = (Number(profile.monthly_income) || 0) - totalExpenses;
+  const netSavingsPerMonth = Math.max(freeCash, 0);
+  const monthsToGoal = Math.max(Number(profile.goal_timeline_months) || 36, 1);
+  const goalAmount = Number(profile.goal_amount) || 60000;
+  const savingsProjection = Array.from({ length: 12 }, (_, index) => {
+    const progress = index / 11;
+    return Math.round((Number(profile.savings) || 0) + (netSavingsPerMonth * monthsToGoal * progress));
+  });
+  const finalProjectedSavings = savingsProjection[savingsProjection.length - 1];
+  const currencyCode = normalizeCurrencyCode(profile.currency || "USD");
+  const money = (value) => formatMoney(value, currencyCode);
 
   useEffect(() => {
     logsEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -196,52 +235,44 @@ export default function FinanceWarRoom() {
   // ── Demo Mode (local simulation) ──
   const DEMO_OUTPUTS = {
     intake: [
-      "Monthly income: $7,500",
-      "Total expenses: $4,850 (64.7% of income)",
-      "Free cash flow: $2,650/month",
-      "Total debt: $44,200",
-      "Net worth: ~($20,700)",
+      `Monthly income: ${money(profile.monthly_income)}`,
+      `Total expenses: ${money(totalExpenses)} (${((totalExpenses / (profile.monthly_income || 1)) * 100).toFixed(1)}% of income)`,
+      `Free cash flow: ${money(freeCash)}/month`,
+      `Total debt: ${money(totalDebt)}`,
+      `Net worth: ${money((profile.savings || 0) + (profile.investments || 0) - totalDebt)}`,
       `Goal: ${profile.goal}`,
     ],
     budget: [
-      "🔴 Subscriptions ($180): 3 overlapping services — save $35/mo",
-      "🔴 Shopping ($520): 38% above benchmark — target $350, save $170/mo",
-      "🟡 Food ($650): Slightly high — meal prep could save $120/mo",
-      "🟢 Housing ($2,100): 28% of income — within 30% guideline",
-      "🟢 Insurance ($280): Within normal range",
-      "💰 Total recoverable: $325/month → $11,700 over 3 years",
-      "📋 Recommended: 50/30/20 → $3,750 needs / $2,250 wants / $1,500 savings",
+      `🧾 Total spending categories: ${Object.keys(profile.expenses || {}).length}`,
+      `💰 Current expenses: ${money(totalExpenses)}/month`,
+      `📉 Suggested optimization target: ${money(Math.max(totalExpenses * 0.08, 0))}/month`,
+      `📋 Recommended baseline split: 50/30/20`,
     ],
     debt: [
-      "⚡ PRIORITY: Credit Card @ 22.9% APR — $80/mo in interest alone",
-      "📋 Strategy: Avalanche Method (highest interest first)",
-      "→ Phase 1 (Mo 1-7): Extra $500/mo to Credit Card — PAID OFF",
-      "→ Phase 2 (Mo 8-19): Redirect $620/mo to Car Loan — PAID OFF",
-      "→ Phase 3 (Mo 20-28): Accelerate Student Loan — saves $4,200 interest",
-      "🎯 Debt-free in 28 months (8 months ahead of minimum schedule)",
+      `📌 Total debts: ${(profile.debts || []).length}`,
+      `💳 Outstanding debt: ${money(totalDebt)}`,
+      `📋 Minimum debt payments: ${money(monthlyDebtMinimum)}/month`,
+      "🎯 Strategy: avalanche payoff (highest interest first)",
     ],
     invest: [
-      "📊 Current portfolio: $15,000 (needs diversification review)",
-      "🎯 Risk profile: Moderate (age 30, 3yr goal horizon)",
-      "→ Goal fund: High-yield savings @ 4.5% APY (safe & liquid)",
-      "→ Long-term: 55% US stocks / 25% bonds / 10% international / 10% cash",
-      "⚡ FIRST: Max employer 401k match (4%) — free 100% return",
-      "💡 Don't invest down payment money in stocks — too short timeline",
+      `📊 Current portfolio: ${money(profile.investments)}`,
+      `🎯 Risk profile: ${(profile.risk_tolerance || "moderate").toString()} (age ${profile.age || "n/a"})`,
+      `⚡ Employer 401k match: ${(profile.employer_401k_match || 0).toFixed(1)}%`,
+      "💡 Keep short-term goal funds in low-volatility assets",
     ],
     tax: [
-      "🏛️ Max 401(k): Saves ~$5,520/yr at 24% bracket",
-      "🏛️ HSA contributions: Saves ~$996/yr (triple tax advantage)",
-      "→ Student loan interest deduction: Up to $600/yr",
-      "💡 Roth IRA: $7,000/yr for tax-free retirement growth",
-      "🎯 Total annual tax savings: ~$7,116 → $593/mo redirectable",
+      `🏛️ Filing status: ${profile.tax_filing_status || "single"}`,
+      `💼 Annual income used: ${money(profile.annual_income || (profile.monthly_income || 0) * 12)}`,
+      "💡 Tax strategy is generated in full in Live API mode",
     ],
     roadmap: [
-      "📅 Months 1-7: Kill credit card debt + save $1,200/mo to HYSA",
-      "📅 Months 8-19: Pay off car loan + save $1,600/mo",
-      "📅 Months 20-28: Accelerate student loan + save $2,100/mo",
-      "📅 Months 29-36: Full savings sprint — $2,650/mo to down payment",
-      "🏠 Projected at month 36: $62,400",
-      "🎉 GOAL ACHIEVABLE — $2,400 buffer for closing costs!",
+      `📅 Timeline: ${monthsToGoal} months`,
+      `🏠 Goal target: ${money(goalAmount)}`,
+      `💵 Current savings: ${money(profile.savings)}`,
+      `🚀 Projected savings at month ${monthsToGoal}: ${money(finalProjectedSavings)}`,
+      finalProjectedSavings >= goalAmount
+        ? `🎉 Goal is achievable with an estimated ${money(finalProjectedSavings - goalAmount)} buffer`
+        : `⚠️ Estimated shortfall: ${money(goalAmount - finalProjectedSavings)} — increase monthly savings`,
     ],
   };
 
@@ -350,6 +381,7 @@ export default function FinanceWarRoom() {
       }
 
       setProfile(payload.profile);
+      setMode("live");
       setShowPromptModal(false);
       setLogs(prev => [...prev, { step: "intake", type: "result", text: "✅ Profile generated from prompt. Review and run analysis." }]);
     } catch (e) {
@@ -365,8 +397,6 @@ export default function FinanceWarRoom() {
     label: k, value: v,
     color: ["#FF5A5A", "#3DD6D0", "#FFCF56", "#B088F9", "#00FFB2", "#FF9F43", "#6366F1", "#FDA7DF", "#38BDF8"][i % 9],
   }));
-
-  const savingsProjection = [8500, 9800, 12200, 15800, 20400, 26000, 32500, 39800, 47000, 53500, 58200, 62400];
 
   return (
     <div style={{
@@ -518,7 +548,7 @@ export default function FinanceWarRoom() {
           <div style={{ background: "#111827", borderRadius: 11, border: "1px solid rgba(255,255,255,0.05)", padding: 14 }}>
             <h3 style={{ fontFamily: "'Outfit', sans-serif", fontSize: 11, fontWeight: 600, color: "#475569", margin: "0 0 10px", textTransform: "uppercase", letterSpacing: "1.2px" }}>Expenses</h3>
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-              <Donut segments={expenseSegs} />
+              <Donut segments={expenseSegs} currencyCode={currencyCode} />
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {expenseSegs.map(seg => (
@@ -534,10 +564,10 @@ export default function FinanceWarRoom() {
           <div style={{ background: "#111827", borderRadius: 11, border: "1px solid rgba(255,255,255,0.05)", padding: 14 }}>
             <h3 style={{ fontFamily: "'Outfit', sans-serif", fontSize: 11, fontWeight: 600, color: "#475569", margin: "0 0 10px", textTransform: "uppercase", letterSpacing: "1.2px" }}>Debts</h3>
             {profile.debts.map((d, i) => (
-              <DebtBar key={d.name} name={d.name} balance={d.balance} rate={d.interest_rate} max={28000} color={["#FF5A5A", "#FFCF56", "#3DD6D0"][i]} />
+              <DebtBar key={d.name} name={d.name} balance={d.balance} rate={d.interest_rate} max={28000} color={["#FF5A5A", "#FFCF56", "#3DD6D0"][i]} currencyCode={currencyCode} />
             ))}
             <div style={{ marginTop: 8, padding: "7px 9px", borderRadius: 6, background: "rgba(255,90,90,0.06)", border: "1px solid rgba(255,90,90,0.12)", fontSize: 10.5, color: "#FF5A5A" }}>
-              Total: ${profile.debts.reduce((s, d) => s + d.balance, 0).toLocaleString()} · Min: ${profile.debts.reduce((s, d) => s + d.minimum_payment, 0)}/mo
+              Total: {money(totalDebt)} · Min: {money(monthlyDebtMinimum)}/mo
             </div>
           </div>
         </div>
@@ -546,23 +576,25 @@ export default function FinanceWarRoom() {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {/* Metrics Row */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
-            <MetricCard label="Monthly Income" value="$7,500" color="#00FFB2" spark={[6800, 7000, 7200, 7500, 7500, 7500]} />
-            <MetricCard label="Expenses" value="$4,850" color="#FF5A5A" spark={[4200, 4400, 4600, 4700, 4900, 4850]} />
-            <MetricCard label="Free Cash" value="$2,650" color="#3DD6D0" spark={[2600, 2600, 2600, 2800, 2600, 2650]} />
-            <MetricCard label="Savings" value="$8,500" color="#B088F9" spark={[3000, 4200, 5500, 6800, 7600, 8500]} />
-            <MetricCard label="Investments" value="$15,000" color="#FFCF56" spark={[10000, 11200, 12800, 13500, 14200, 15000]} />
-            <MetricCard label="Total Debt" value="$44,200" color="#FF5A5A" spark={[52000, 50000, 48000, 47000, 45500, 44200]} />
+            <MetricCard label="Monthly Income" value={money(profile.monthly_income)} color="#00FFB2" spark={[0.8, 0.9, 0.95, 1, 1, 1].map((f) => (profile.monthly_income || 0) * f)} />
+            <MetricCard label="Expenses" value={money(totalExpenses)} color="#FF5A5A" spark={[0.85, 0.9, 0.95, 1, 1.02, 1].map((f) => totalExpenses * f)} />
+            <MetricCard label="Free Cash" value={money(freeCash)} color="#3DD6D0" spark={[0.8, 0.85, 0.9, 1, 0.95, 1].map((f) => freeCash * f)} />
+            <MetricCard label="Savings" value={money(profile.savings)} color="#B088F9" spark={[0.35, 0.5, 0.65, 0.8, 0.9, 1].map((f) => (profile.savings || 0) * f)} />
+            <MetricCard label="Investments" value={money(profile.investments)} color="#FFCF56" spark={[0.7, 0.78, 0.85, 0.9, 0.95, 1].map((f) => (profile.investments || 0) * f)} />
+            <MetricCard label="Total Debt" value={money(totalDebt)} color="#FF5A5A" spark={[1.2, 1.12, 1.07, 1.03, 1.01, 1].map((f) => totalDebt * f)} />
           </div>
 
           {/* Goal Banner */}
           <div style={{ padding: "11px 14px", borderRadius: 9, background: "rgba(176,136,249,0.06)", border: "1px solid rgba(176,136,249,0.15)", fontSize: 12, color: "#B088F9" }}>
-            🏠 {profile.goal} — Target: ${profile.goal_amount?.toLocaleString() || "60,000"} in {profile.goal_timeline_months || 36} months
+            🏠 {profile.goal} — Target: {money(profile.goal_amount || 60000)} in {profile.goal_timeline_months || 36} months
           </div>
 
           {/* Savings Projection (shown after analysis starts) */}
           {activeStep >= 0 && (
             <div style={{ background: "#111827", borderRadius: 11, border: "1px solid rgba(255,255,255,0.05)", padding: 16 }}>
-              <h3 style={{ fontFamily: "'Outfit', sans-serif", fontSize: 11, fontWeight: 600, color: "#475569", margin: "0 0 10px", textTransform: "uppercase", letterSpacing: "1.2px" }}>Savings Trajectory → $60,000 Goal</h3>
+              <h3 style={{ fontFamily: "'Outfit', sans-serif", fontSize: 11, fontWeight: 600, color: "#475569", margin: "0 0 10px", textTransform: "uppercase", letterSpacing: "1.2px" }}>
+                Savings Trajectory → {money(goalAmount)} Goal
+              </h3>
               <div style={{ display: "flex", alignItems: "end", gap: 5, height: 90 }}>
                 {savingsProjection.map((val, i) => {
                   const maxV = Math.max(...savingsProjection);
@@ -570,7 +602,7 @@ export default function FinanceWarRoom() {
                   const isLast = i === savingsProjection.length - 1;
                   return (
                     <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                      {(i === 0 || isLast) && <span style={{ fontSize: 8.5, color: isLast ? "#00FFB2" : "#475569" }}>{i === 0 ? "Now" : "Mo 36"}</span>}
+                      {(i === 0 || isLast) && <span style={{ fontSize: 8.5, color: isLast ? "#00FFB2" : "#475569" }}>{i === 0 ? "Now" : `Mo ${monthsToGoal}`}</span>}
                       {i > 0 && !isLast && <span style={{ fontSize: 0 }}>&nbsp;</span>}
                       <div style={{
                         width: "100%", height: `${hPct}%`, borderRadius: 3, minHeight: 3,
@@ -582,8 +614,10 @@ export default function FinanceWarRoom() {
                 })}
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 9.5, color: "#475569" }}>
-                <span>$8,500</span>
-                <span style={{ color: "#00FFB2", fontWeight: 700 }}>$62,400 🎯</span>
+                <span>{money(profile.savings)}</span>
+                <span style={{ color: finalProjectedSavings >= goalAmount ? "#00FFB2" : "#FF5A5A", fontWeight: 700 }}>
+                  {money(finalProjectedSavings)} {finalProjectedSavings >= goalAmount ? "🎯" : "⚠️"}
+                </span>
               </div>
             </div>
           )}
@@ -624,7 +658,7 @@ export default function FinanceWarRoom() {
                 animation: "fadeIn 0.25s ease",
               }}>
                 {log.type === "result" && <span style={{ color: "#475569", marginRight: 5 }}>→</span>}
-                {log.text}
+                {formatLogCurrency(log.text, currencyCode)}
               </div>
             ))}
             <div ref={logsEnd} />

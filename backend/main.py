@@ -48,8 +48,24 @@ cors_kwargs = {
     "allow_methods": ["*"],
     "allow_headers": ["*"],
 }
+
+# Frontend deploy URLs on Vercel change frequently. This API does not rely on
+# cookies/session credentials, so permissive CORS is acceptable in production.
+if settings.APP_ENV == "production":
+    cors_kwargs["allow_origins"] = ["*"]
+    cors_kwargs["allow_credentials"] = False
+
+origin_regex_parts = []
 if settings.CORS_ALLOW_LOCALHOST:
-    cors_kwargs["allow_origin_regex"] = settings.CORS_LOCALHOST_REGEX
+    origin_regex_parts.append(settings.CORS_LOCALHOST_REGEX)
+
+# Allow Vercel preview/production domains so fresh deploy URLs work
+# without manually updating CORS_ORIGINS on every frontend redeploy.
+if settings.APP_ENV == "production":
+    origin_regex_parts.append(r"^https://[a-zA-Z0-9-]+\.vercel\.app$")
+
+if origin_regex_parts:
+    cors_kwargs["allow_origin_regex"] = "|".join(origin_regex_parts)
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
 
@@ -100,11 +116,52 @@ SAMPLE_PROFILE = {
     "age": 30,
     "risk_tolerance": "moderate",
     "employer_401k_match": 4.0,
+    "currency": "USD",
 }
 
 
 class ProfileFromTextRequest(BaseModel):
     text: str
+
+
+def _extract_number(raw: str) -> float:
+    cleaned = raw.replace(",", "").strip()
+    return float(cleaned)
+
+
+def _apply_prompt_heuristics(prompt: str, profile: dict) -> dict:
+    """
+    Improve parsing for short informal prompts where users omit keywords.
+    """
+    prompt_lower = prompt.lower()
+
+    # If user says "I have <amount> rupees" without saying savings/balance,
+    # treat it as monthly income for goal planning.
+    have_amount_match = re.search(
+        r"\bi\s+have\s+(?:₹|rs\.?|inr|rupees?)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+        prompt_lower,
+    )
+    if have_amount_match and not any(token in prompt_lower for token in ("saving", "saved", "balance", "in bank")):
+        profile["monthly_income"] = _extract_number(have_amount_match.group(1))
+        profile["annual_income"] = profile["monthly_income"] * 12
+
+    # Parse "buy <item> <amount> ... in <n> months/years"
+    buy_goal_match = re.search(
+        r"\bbuy(?:\s+a|\s+an|\s+the)?\s+([a-zA-Z ]{1,40}?)\s+(?:for\s+)?(?:₹|rs\.?|inr|rupees?)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+        prompt_lower,
+    )
+    if buy_goal_match:
+        item = buy_goal_match.group(1).strip()
+        profile["goal"] = f"Buy {item.upper()}" if len(item) <= 4 else f"Buy {item.title()}"
+        profile["goal_amount"] = _extract_number(buy_goal_match.group(2))
+
+    timeline_match = re.search(r"\bin\s+([0-9]{1,3})\s*(month|months|year|years)\b", prompt_lower)
+    if timeline_match:
+        qty = int(timeline_match.group(1))
+        unit = timeline_match.group(2)
+        profile["goal_timeline_months"] = qty * 12 if "year" in unit else qty
+
+    return profile
 
 
 def _extract_json_object(text: str) -> dict:
@@ -133,6 +190,7 @@ async def root():
     return {
         "name": "Finance War Room API",
         "version": "1.0.0",
+        "app_env": settings.APP_ENV,
         "agents": [
             "Budget Analyst",
             "Debt Strategist",
@@ -215,6 +273,7 @@ async def profile_from_text(payload: ProfileFromTextRequest):
             "age": 30,
             "risk_tolerance": "moderate",
             "employer_401k_match": 4.0,
+            "currency": "USD",
         }
 
         messages = [
@@ -223,7 +282,8 @@ async def profile_from_text(payload: ProfileFromTextRequest):
                     "You are a financial intake parser. Convert the user's message to a single JSON "
                     "object matching the required schema. Return ONLY raw JSON with no markdown. "
                     "Use numeric values for numeric fields. If a field is missing, infer a conservative "
-                    "default. Keep expenses as an object of category->monthly amount and debts as a list."
+                    "default. Keep expenses as an object of category->monthly amount and debts as a list. "
+                    "Include a 'currency' field using a 3-letter code (e.g., USD, AED) inferred from user text."
                 )
             ),
             HumanMessage(
@@ -242,6 +302,14 @@ async def profile_from_text(payload: ProfileFromTextRequest):
 
         # Merge with defaults so optional gaps still validate.
         merged_profile = {**SAMPLE_PROFILE, **parsed}
+        prompt_lower = prompt.lower()
+        if any(token in prompt_lower for token in ("aed", "dirham", "dubai", "د.إ")):
+            merged_profile["currency"] = "AED"
+        elif any(token in prompt_lower for token in ("inr", "rs", "rupee", "rupees", "₹")):
+            merged_profile["currency"] = "INR"
+        elif "usd" in prompt_lower or "$" in prompt_lower:
+            merged_profile["currency"] = "USD"
+        merged_profile = _apply_prompt_heuristics(prompt, merged_profile)
         profile = FinancialProfile(**merged_profile)
 
         return {"status": "ok", "profile": profile.model_dump()}
